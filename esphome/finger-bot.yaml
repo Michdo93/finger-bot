@@ -1,0 +1,139 @@
+substitutions:
+  device_name: finger-bot
+  friendly_name: "Finger Bot"
+  wifi_ssid: "YOUR_WIFI_SSID"
+  wifi_password: "YOUR_WIFI_PASSWORD"
+  mqtt_broker: "192.168.1.100"
+  mqtt_port: "1883"
+  mqtt_username: ""
+  mqtt_password: ""
+  servo_pin: GPIO5
+  press_duration_ms: "500"
+  press_angle: "90"
+  idle_angle: "0"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: 600
+    then:
+      - logger.log: "Finger Bot booting..."
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
+  power_save_mode: HIGH
+  fast_connect: true
+  reboot_timeout: 0s
+  on_connect:
+    - logger.log: "WiFi connected"
+  on_disconnect:
+    - logger.log: "WiFi disconnected"
+
+mqtt:
+  broker: ${mqtt_broker}
+  port: ${mqtt_port}
+  username: ${mqtt_username}
+  password: ${mqtt_password}
+  client_id: ${device_name}
+  discovery: true
+  discovery_prefix: homeassistant
+  birth_message:
+    topic: finger-bot/01/state
+    payload: online
+  will_message:
+    topic: finger-bot/01/state
+    payload: offline
+  on_message:
+    - topic: finger-bot/01/command
+      then:
+        - lambda: |-
+            std::string payload = x;
+            int count = 1;
+            if (payload.find("press:") == 0) {
+              count = std::stoi(payload.substr(6));
+            }
+            if (count < 1) count = 1;
+            if (count > 10) count = 10;
+            id(press_count) = count;
+        - script.execute: do_press
+
+ota:
+  password: "ota_password_change_me"
+
+# PWM output for servo
+output:
+  - platform: ledc
+    id: servo_pwm
+    pin: ${servo_pin}
+    frequency: 50Hz
+
+servo:
+  - id: finger_servo
+    output: servo_pwm
+    min_level: 3.0%
+    max_level: 12.0%
+
+globals:
+  - id: press_count
+    type: int
+    restore_value: false
+    initial_value: "1"
+
+script:
+  - id: do_press
+    mode: single
+    then:
+      - repeat:
+          count: !lambda "return id(press_count);"
+          then:
+            - mqtt.publish:
+                topic: finger-bot/01/state
+                payload: pressing
+            - servo.write:
+                id: finger_servo
+                level: !lambda "return ${press_angle} / 180.0 * 2.0 - 1.0;"
+            - delay: ${press_duration_ms}ms
+            - servo.write:
+                id: finger_servo
+                level: !lambda "return ${idle_angle} / 180.0 * 2.0 - 1.0;"
+            - delay: 300ms
+      - mqtt.publish:
+          topic: finger-bot/01/state
+          payload: idle
+      - logger.log: "Press sequence complete"
+
+sensor:
+  - platform: adc
+    pin: GPIO2
+    id: battery_voltage
+    name: "Battery Voltage"
+    update_interval: never
+    attenuation: 11db
+    filters:
+      - multiply: 2.0     # voltage divider 1:1 (100kΩ + 100kΩ)
+    on_value:
+      then:
+        - mqtt.publish:
+            topic: finger-bot/01/battery
+            payload: !lambda |-
+              float v = x;
+              // 2× AA: 3.0V = 100%, 2.0V = 0%
+              float pct = (v - 2.0) / (3.0 - 2.0) * 100.0;
+              if (pct > 100.0) pct = 100.0;
+              if (pct < 0.0)   pct = 0.0;
+              return to_string((int)pct);
+
+deep_sleep:
+  id: deep_sleep_ctrl
+  run_duration: 15s    # stay awake long enough to receive MQTT + execute
+  sleep_duration: 0s   # managed manually; device sleeps after run_duration

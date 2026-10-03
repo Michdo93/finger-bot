@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# finger-bot – Home Assistant MQTT configuration
+# Add this to your configuration.yaml (or split into packages)
+# ─────────────────────────────────────────────────────────────────────────────
+
+mqtt:
+
+  # ── Button entity ──────────────────────────────────────────────────────────
+  button:
+    - name: "Finger Bot 01"
+      unique_id: finger_bot_01_press
+      command_topic: "finger-bot/01/command"
+      payload_press: "press"
+      retain: false
+      qos: 1
+      availability:
+        - topic: "finger-bot/01/state"
+          payload_available: "online"
+          payload_not_available: "offline"
+
+  # ── State sensor ───────────────────────────────────────────────────────────
+  sensor:
+    - name: "Finger Bot 01 State"
+      unique_id: finger_bot_01_state
+      state_topic: "finger-bot/01/state"
+      icon: mdi:gesture-tap-button
+
+    - name: "Finger Bot 01 Battery"
+      unique_id: finger_bot_01_battery
+      state_topic: "finger-bot/01/battery"
+      unit_of_measurement: "%"
+      device_class: battery
+      state_class: measurement
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example automations
+# ─────────────────────────────────────────────────────────────────────────────
+
+automation:
+
+  # Press button every morning at 07:00
+  - alias: "Finger Bot – Morning press"
+    id: finger_bot_morning_press
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "finger-bot/01/command"
+          payload: "press"
+          qos: 1
+
+  # Press button 3 times when a scene is activated
+  - alias: "Finger Bot – Triple press on scene"
+    id: finger_bot_triple_press
+    trigger:
+      - platform: state
+        entity_id: scene.movie_mode
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "finger-bot/01/command"
+          payload: "press:3"
+          qos: 1
+
+  # Notify when battery is low
+  - alias: "Finger Bot – Low battery warning"
+    id: finger_bot_low_battery
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.finger_bot_01_battery
+        below: 10
+    action:
+      - service: notify.notify
+        data:
+          title: "Finger Bot Battery Low"
+          message: "Finger Bot 01 battery is below 10%. Replace AA batteries."
